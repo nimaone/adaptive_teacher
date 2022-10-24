@@ -651,7 +651,8 @@ class ATeacherTrainer(DefaultTrainer):
 
             losses = sum(loss_dict.values())
 
-        metrics_dict = record_dict
+#         metrics_dict = record_dict
+        metrics_dict = loss_dict
         metrics_dict["data_time"] = data_time
         self._write_metrics(metrics_dict)
 
