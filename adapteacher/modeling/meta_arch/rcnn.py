@@ -100,15 +100,28 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         ), f"{self.pixel_mean} and {self.pixel_std} have different shapes!"
         # @yujheli: you may need to build your discriminator here
 
-        self.dis_type = dis_type
-        self.D_img = None
+        # self.dis_type = dis_type
+        # self.D_img = None
         # self.D_img = FCDiscriminator_img(self.backbone._out_feature_channels['res4']) # Need to know the channel
         
         # self.D_img = None
-        self.D_img = FCDiscriminator_img(self.backbone._out_feature_channels[self.dis_type]) # Need to know the channel
+        # self.D_img = FCDiscriminator_img(self.backbone._out_feature_channels[self.dis_type]) # Need to know the channel
         # self.bceLoss_func = nn.BCEWithLogitsLoss()
-    def build_discriminator(self):
-        self.D_img = FCDiscriminator_img(self.backbone._out_feature_channels[self.dis_type]).to(self.device) # Need to know the channel
+
+        self.dis_type = dis_type
+        # self.D_img = FCDiscriminator_img(self.backbone._out_feature_channels['res4']) # Need to know the channel
+        if self.dis_type == "multi":
+            self.D_img_dict = {}
+            for k,v in self.backbone._out_feature_channels.items():
+                self.D_img_dict[k] = FCDiscriminator_img(v)
+                self.add_module("D_"+k, self.D_img_dict[k])
+        else:
+            self.D_img = FCDiscriminator_img(self.backbone._out_feature_channels[self.dis_type]) # Need to know the channel
+        # self.bceLoss_func = nn.BCEWithLogitsLoss()
+    
+    
+    # def build_discriminator(self):
+       # self.D_img = FCDiscriminator_img(self.backbone._out_feature_channels[self.dis_type]).to(self.device) # Need to know the channel
 
     @classmethod
     def from_config(cls, cfg):
@@ -164,18 +177,18 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
                 The :class:`Instances` object has the following keys:
                 "pred_boxes", "pred_classes", "scores", "pred_masks", "pred_keypoints"
         """
-        if self.D_img == None:
-            self.build_discriminator()
+        # if self.D_img == None:
+            # self.build_discriminator()
         if (not self.training) and (not val_mode):  # only conduct when testing mode
             return self.inference(batched_inputs)
 
-        source_label = 0
-        target_label = 1
+        # source_label = 0
+        # target_label = 1
 
         if branch == "domain":
             # self.D_img.train()
-            # source_label = 0
-            # target_label = 1
+            source_label = 0
+            target_label = 1
             # images = self.preprocess_image(batched_inputs)
             images_s, images_t = self.preprocess_image_train(batched_inputs)
 
@@ -184,17 +197,48 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
             # import pdb
             # pdb.set_trace()
            
-            features_s = grad_reverse(features[self.dis_type])
-            D_img_out_s = self.D_img(features_s)
-            loss_D_img_s = F.binary_cross_entropy_with_logits(D_img_out_s, torch.FloatTensor(D_img_out_s.data.size()).fill_(source_label).to(self.device))
+            # features_s = grad_reverse(features[self.dis_type])
+            # D_img_out_s = self.D_img(features_s)
+            # loss_D_img_s = F.binary_cross_entropy_with_logits(D_img_out_s, torch.FloatTensor(D_img_out_s.data.size()).fill_(source_label).to(self.device))
 
+            if self.dis_type == "multi":
+                loss_D_img_s = 0
+                for k, v in features.items():
+                    features_s = grad_reverse(v)
+                    D_img_out_s = self.D_img_dict[k](features_s)
+                    loss_D_img_s += F.binary_cross_entropy_with_logits(D_img_out_s, torch.FloatTensor(D_img_out_s.data.size()).fill_(source_label).to(self.device))
+                loss_D_img_s /= len(features)
+                # features_s = grad_reverse(torch.cat((features['p2'],features['p3'],features['p4'],features['p5']),dim=1))
+            else:
+                features_s = grad_reverse(features[self.dis_type])
+                D_img_out_s = self.D_img(features_s)
+                loss_D_img_s = F.binary_cross_entropy_with_logits(D_img_out_s, torch.FloatTensor(D_img_out_s.data.size()).fill_(source_label).to(self.device))
+
+
+
+
+            
             features_t = self.backbone(images_t.tensor)
             
-            features_t = grad_reverse(features_t[self.dis_type])
+            # features_t = grad_reverse(features_t[self.dis_type])
+            # # features_t = grad_reverse(features_t['p2'])
+            # D_img_out_t = self.D_img(features_t)
+            # loss_D_img_t = F.binary_cross_entropy_with_logits(D_img_out_t, torch.FloatTensor(D_img_out_t.data.size()).fill_(target_label).to(self.device))
+            if self.dis_type == "multi":
+                loss_D_img_t = 0
+                for k, v in features_t.items():
+                    features_tt = grad_reverse(v)
+                    D_img_out_t = self.D_img_dict[k](features_tt)
+                    loss_D_img_t += F.binary_cross_entropy_with_logits(D_img_out_t, torch.FloatTensor(D_img_out_t.data.size()).fill_(target_label).to(self.device))
+                loss_D_img_t /= len(features_t)
+            else:
+                features_t = grad_reverse(features_t[self.dis_type])
             # features_t = grad_reverse(features_t['p2'])
-            D_img_out_t = self.D_img(features_t)
-            loss_D_img_t = F.binary_cross_entropy_with_logits(D_img_out_t, torch.FloatTensor(D_img_out_t.data.size()).fill_(target_label).to(self.device))
+                D_img_out_t = self.D_img(features_t)
+                loss_D_img_t = F.binary_cross_entropy_with_logits(D_img_out_t, torch.FloatTensor(D_img_out_t.data.size()).fill_(target_label).to(self.device))
 
+
+            
             # import pdb
             # pdb.set_trace()
 
@@ -215,9 +259,9 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
 
         # TODO: remove the usage of if else here. This needs to be re-organized
         if branch.startswith("supervised"):
-            features_s = grad_reverse(features[self.dis_type])
-            D_img_out_s = self.D_img(features_s)
-            loss_D_img_s = F.binary_cross_entropy_with_logits(D_img_out_s, torch.FloatTensor(D_img_out_s.data.size()).fill_(source_label).to(self.device))
+            # features_s = grad_reverse(features[self.dis_type])
+            # D_img_out_s = self.D_img(features_s)
+            # loss_D_img_s = F.binary_cross_entropy_with_logits(D_img_out_s, torch.FloatTensor(D_img_out_s.data.size()).fill_(source_label).to(self.device))
 
             
             # Region proposal network
@@ -244,7 +288,7 @@ class DAobjTwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
             losses = {}
             losses.update(detector_losses)
             losses.update(proposal_losses)
-            losses["loss_D_img_s"] = loss_D_img_s*0.001
+            # losses["loss_D_img_s"] = loss_D_img_s*0.001
             return losses, [], [], None
 
         elif branch.startswith("supervised_target"):
